@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLMOps 03 — Caching &amp; Routing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0a;
+            --bg-card: #0d1117;
+            --bg-code: #161b22;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --accent: #76B900;
+            --accent-dim: #76B90044;
+            --accent-glow: #76B90033;
+            --border: #21262d;
+            --font-display: 'Space Grotesk', sans-serif;
+            --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+            --font-body: 'Inter', sans-serif;
+            --max-width: 900px;
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+        body {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: var(--font-body);
+            font-size: 17px;
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem 1.5rem;
+            text-align: center;
+            position: relative;
+        }
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .hero > * { position: relative; z-index: 1; }
+        .series-label {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--accent);
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+        }
+        .hero h1 {
+            font-family: var(--font-display);
+            font-size: clamp(2rem, 5vw, 3.2rem);
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.2;
+            margin-bottom: 1rem;
+        }
+        .hero h1 .accent { color: var(--accent); }
+        .hero .subtitle {
+            font-size: 1.1rem;
+            color: var(--text-secondary);
+            max-width: 640px;
+            margin-bottom: 2rem;
+        }
+        .tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            justify-content: center;
+            margin-bottom: 2.5rem;
+        }
+        .tag {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            background: var(--accent-dim);
+            white-space: nowrap;
+        }
+        .pipeline {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.25rem;
+            margin-bottom: 1rem;
+            max-width: var(--max-width);
+        }
+        .pipeline-step {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            padding: 0.3rem 0.7rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+        .pipeline-arrow { color: var(--accent); font-size: 0.9rem; font-weight: 700; }
+        .slide {
+            min-height: 100vh;
+            max-width: var(--max-width);
+            margin: 0 auto;
+            padding: 4rem 1.5rem;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .slide-number {
+            font-family: var(--font-display);
+            font-size: 5rem;
+            font-weight: 700;
+            color: var(--accent-dim);
+            position: absolute;
+            top: 2rem;
+            right: 1.5rem;
+            line-height: 1;
+            user-select: none;
+        }
+        .slide h2 {
+            font-family: var(--font-display);
+            font-size: 1.9rem;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 1.5rem;
+            line-height: 1.25;
+        }
+        .slide h3 {
+            font-family: var(--font-display);
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+        .slide p { margin-bottom: 1rem; color: var(--text-secondary); }
+        .slide p strong { color: var(--text-primary); }
+        .slide ul, .slide ol { margin-bottom: 1rem; padding-left: 1.5rem; color: var(--text-secondary); }
+        .slide li { margin-bottom: 0.4rem; }
+        .slide li strong { color: var(--text-primary); }
+        .slide code {
+            font-family: var(--font-mono);
+            font-size: 0.88em;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            padding: 0.05rem 0.35rem;
+            border-radius: 3px;
+            color: #c9d1d9;
+        }
+        .code-block {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin: 1.25rem 0;
+            overflow: hidden;
+        }
+        .code-header {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--accent);
+            background: rgba(118, 185, 0, 0.08);
+            padding: 0.4rem 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .code-block pre { margin: 0; padding: 1rem; overflow-x: auto; }
+        .code-block code {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: #c9d1d9;
+            background: transparent;
+            border: none;
+            padding: 0;
+        }
+        .kw { color: #ff7b72; }
+        .fn { color: #d2a8ff; }
+        .str { color: #a5d6ff; }
+        .cm { color: #8b949e; font-style: italic; }
+        .num { color: #79c0ff; }
+        .type { color: #ffa657; }
+        .dir { color: #ff7b72; }
+        .mac { color: #ffa657; }
+        .table-wrap {
+            overflow-x: auto;
+            margin: 1.25rem 0;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th {
+            background: var(--bg-code);
+            color: var(--accent);
+            font-weight: 600;
+            text-align: left;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border);
+            font-family: var(--font-display);
+            white-space: nowrap;
+        }
+        td {
+            padding: 0.6rem 1rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+        tr:last-child td { border-bottom: none; }
+        tr:nth-child(even) td { background: rgba(13, 17, 23, 0.5); }
+        .diagram-flow {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .diagram-box {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            text-align: center;
+            white-space: nowrap;
+        }
+        .diagram-box.accent { border-color: var(--accent); color: var(--accent); background: rgba(118, 185, 0, 0.08); }
+        .diagram-box.dim { color: var(--text-secondary); border-color: var(--border); }
+        .diagram-arrow { color: var(--accent); font-size: 1.3rem; font-weight: 700; }
+        .diagram-vertical {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.3rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .diagram-vertical .diagram-arrow { font-size: 1.1rem; }
+        .hierarchy {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .hierarchy-level { display: flex; align-items: center; gap: 0.75rem; }
+        .hierarchy-label {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            min-width: 80px;
+            text-align: right;
+        }
+        .hierarchy-items { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+        .hierarchy-item {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+        .hierarchy-item.accent { border-color: var(--accent); color: var(--accent); background: rgba(118, 185, 0, 0.08); }
+        .diagram-grid {
+            display: grid;
+            gap: 0.75rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .diagram-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+        .diagram-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .diagram-panel {
+            padding: 1rem;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+        .diagram-panel.accent-border { border-left: 3px solid var(--accent); }
+        .diagram-panel h4 {
+            font-family: var(--font-display);
+            font-size: 1rem;
+            color: var(--accent);
+            margin-bottom: 0.5rem;
+        }
+        .diagram-panel p, .diagram-panel ul { font-size: 0.85rem; }
+        .callout {
+            background: var(--bg-card);
+            border-left: 3px solid var(--accent);
+            border-radius: 0 8px 8px 0;
+            padding: 1rem 1.25rem;
+            margin: 1.25rem 0;
+        }
+        .callout p { margin-bottom: 0; }
+        .callout p + p { margin-top: 0.5rem; }
+        .callout .callout-label {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.3rem;
+        }
+        .contents-list { list-style: none; padding-left: 0; counter-reset: contents; }
+        .contents-list li {
+            counter-increment: contents;
+            padding: 0.6rem 0;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .contents-list li:last-child { border-bottom: none; }
+        .contents-list li::before {
+            content: counter(contents, decimal-leading-zero);
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--accent);
+            min-width: 2rem;
+        }
+        .contents-list a { color: var(--text-primary); text-decoration: none; transition: color 0.2s; }
+        .contents-list a:hover { color: var(--accent); }
+        .footer {
+            text-align: center;
+            padding: 3rem 1.5rem;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            border-top: 1px solid var(--border);
+            max-width: var(--max-width);
+            margin: 0 auto;
+        }
+        .footer a { color: var(--accent); text-decoration: none; }
+        .footer a:hover { text-decoration: underline; }
+        .canvas-wrap {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1.25rem 0;
+            overflow-x: auto;
+        }
+        .canvas-wrap canvas, .canvas-wrap svg { display: block; margin: 0 auto; max-width: 100%; }
+        .badge {
+            display: inline-block;
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+            padding: 0.1rem 0.45rem;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            vertical-align: middle;
+            margin-left: 0.3rem;
+        }
+        .badge.ok    { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+        .badge.warn  { border-color: #ffa657; color: #ffa657; background: rgba(255,166,87,0.08); }
+        .badge.bad   { border-color: #ff7b72; color: #ff7b72; background: rgba(255,123,114,0.08); }
+        @media (max-width: 640px) {
+            .slide { padding: 3rem 1rem; min-height: auto; }
+            .slide-number { font-size: 3rem; top: 1.5rem; right: 1rem; }
+            .slide h2 { font-size: 1.5rem; }
+            .diagram-grid.cols-2, .diagram-grid.cols-3 { grid-template-columns: 1fr; }
+            .pipeline { gap: 0.15rem; }
+            .pipeline-step { font-size: 0.6rem; padding: 0.2rem 0.4rem; }
+            .hero h1 { font-size: 1.8rem; }
+            table { font-size: 0.78rem; }
+        }
+    </style>
+</head>
+<body>
+<header class="hero">
+    <div class="series-label">Production LLMOps Series &mdash; Presentation 03</div>
+    <h1>LLM <span class="accent">Caching &amp; Routing</span></h1>
+    <p class="subtitle">Prompt cache (Anthropic / OpenAI), semantic cache, model routing strategies, A/B &amp; shadow traffic &mdash; how to cut cost and latency without sacrificing quality.</p>
+
+    <div class="tags">
+        <span class="tag">Prompt Cache</span>
+        <span class="tag">Semantic Cache</span>
+        <span class="tag">GPTCache</span>
+        <span class="tag">Redis</span>
+        <span class="tag">Routing</span>
+        <span class="tag">A/B Testing</span>
+        <span class="tag">Shadow Traffic</span>
+    </div>
+
+    <div class="pipeline">
+        <span class="pipeline-step">Request</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Exact Cache</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Semantic Cache</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Route</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Provider</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Prompt Cache Hit?</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Response</span>
+    </div>
+</header>
+
+<section class="slide" id="slide-00">
+    <div class="slide-number">00</div>
+    <h2>Topics We&rsquo;ll Cover</h2>
+    <ul class="contents-list">
+        <li><a href="#slide-01">Three Cache Layers &mdash; Exact, Semantic, Prompt Cache</a></li>
+        <li><a href="#slide-02">Anthropic Prompt Caching &mdash; TTL, Breakpoints, Write Cost</a></li>
+        <li><a href="#slide-03">OpenAI Implicit Prompt Cache &mdash; How to Hit It</a></li>
+        <li><a href="#slide-04">Semantic Cache &mdash; GPTCache &amp; the Dangers</a></li>
+        <li><a href="#slide-05">Embedding-Based Exact Match, Redis Variants</a></li>
+        <li><a href="#slide-06">Routing Patterns &mdash; Capability, Cost, Latency</a></li>
+        <li><a href="#slide-07">A/B Routing &mdash; Shadow Traffic, Canary</a></li>
+        <li><a href="#slide-08">Hit-Rate Metrics &amp; Cache Hygiene</a></li>
+        <li><a href="#slide-09">What to Take Away</a></li>
+    </ul>
+</section>
+
+<section class="slide" id="slide-01">
+    <div class="slide-number">01</div>
+    <h2>Three Cache Layers &mdash; Exact, Semantic, Prompt Cache</h2>
+    <p>LLM caching operates at three distinct layers. Understanding which layer applies to which use case prevents misapplication &mdash; each has a different failure mode and cost-saving profile.</p>
+
+    <div class="diagram-vertical">
+        <div class="diagram-box accent">Layer 1: Exact-match cache &mdash; hash(messages) &rarr; stored response</div>
+        <div class="diagram-arrow">&darr; miss</div>
+        <div class="diagram-box">Layer 2: Semantic cache &mdash; embed(prompt) &rarr; cosine nearest neighbour &rarr; stored response</div>
+        <div class="diagram-arrow">&darr; miss</div>
+        <div class="diagram-box accent">Layer 3: Prompt cache &mdash; provider-side KV cache reuse for shared prefix</div>
+        <div class="diagram-arrow">&darr; miss</div>
+        <div class="diagram-box dim">Full generation &mdash; pay full input + output token cost</div>
+    </div>
+
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Layer</th><th>Hit condition</th><th>Cost saving</th><th>Risk</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Exact match</strong></td><td>SHA-256(serialised messages) matches</td><td>100% &mdash; zero provider call</td><td>Stale responses; only works for identical inputs</td></tr>
+                <tr><td><strong>Semantic</strong></td><td>Cosine similarity &gt; threshold (e.g. 0.97)</td><td>100% &mdash; zero provider call</td><td>Wrong answer served for semantically-similar but different question</td></tr>
+                <tr><td><strong>Prompt cache</strong></td><td>Shared prefix exists in provider KV cache</td><td>50&ndash;90% on cached input tokens only</td><td>Cache miss on cold start; TTL-limited</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="callout">
+        <div class="callout-label">When to use each layer</div>
+        <p>Exact match is safe for pure <em>data retrieval</em> prompts where the answer is deterministic (e.g. &ldquo;classify this product category&rdquo;). Semantic cache suits FAQ-style applications where paraphrases should return the same answer. Prompt cache is universally useful when you have a long system prompt or a large document prefix that repeats across requests.</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-02">
+    <div class="slide-number">02</div>
+    <h2>Anthropic Prompt Caching &mdash; TTL, Breakpoints, Write Cost</h2>
+    <p>Anthropic&rsquo;s prompt caching (available on Claude 3 Haiku, Sonnet 3.5, Opus 3, Sonnet 3.5 v2, Haiku 3.5) caches KV activations server-side for a sliding window TTL. The cache is keyed on the exact byte sequence up to the breakpoint.</p>
+
+    <div class="code-block">
+        <div class="code-header">Python SDK &mdash; marking a cache breakpoint</div>
+<pre><code>response = client.messages.<span class="fn">create</span>(
+    model=<span class="str">"claude-3-5-sonnet-20241022"</span>,
+    max_tokens=<span class="num">1024</span>,
+    system=[{
+        <span class="str">"type"</span>: <span class="str">"text"</span>,
+        <span class="str">"text"</span>: long_system_prompt,          <span class="cm"># must be ≥ 1024 tokens</span>
+        <span class="str">"cache_control"</span>: {<span class="str">"type"</span>: <span class="str">"ephemeral"</span>}  <span class="cm"># place breakpoint here</span>
+    }],
+    messages=[
+        {<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: [
+            {<span class="str">"type"</span>: <span class="str">"text"</span>, <span class="str">"text"</span>: full_document,
+             <span class="str">"cache_control"</span>: {<span class="str">"type"</span>: <span class="str">"ephemeral"</span>}},  <span class="cm"># second breakpoint</span>
+            {<span class="str">"type"</span>: <span class="str">"text"</span>, <span class="str">"text"</span>: user_question}
+        ]}
+    ]
+)
+<span class="cm"># response.usage carries:</span>
+<span class="cm"># cache_creation_input_tokens  — tokens written to cache (1.25× cost)</span>
+<span class="cm"># cache_read_input_tokens       — tokens served from cache (0.10× cost)</span>
+<span class="cm"># input_tokens                  — uncached tokens (1.00× cost)</span></code></pre>
+    </div>
+
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Parameter</th><th>Value</th></tr></thead>
+            <tbody>
+                <tr><td>TTL (sliding window)</td><td><strong>5 minutes</strong> after last hit (extended each time the cached prefix is used)</td></tr>
+                <tr><td>Minimum cacheable block</td><td><strong>1024 tokens</strong> for Claude 3 / 3.5; <strong>2048 tokens</strong> for Claude 3 Haiku (lower limit)</td></tr>
+                <tr><td>Maximum breakpoints</td><td><strong>4</strong> per request (system + up to 3 user/tool positions)</td></tr>
+                <tr><td>Cache write cost</td><td>1.25&times; normal input token price</td></tr>
+                <tr><td>Cache read cost</td><td>0.10&times; normal input token price</td></tr>
+                <tr><td>Break-even</td><td>Cache write pays back if the same prefix is used &gt;1.39&times; more often (write amortised over reads)</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="callout">
+        <div class="callout-label">Ordering is critical</div>
+        <p>Cache keys are prefixes, not hashes of the full context. If request A caches tokens 1&ndash;4000 and request B starts with tokens 1&ndash;4000 but then diverges, B will hit the cache for its first 4000 tokens. Change the order of content within the cached section and the cache misses entirely. Keep static content (system prompts, documents) before dynamic content (user messages).</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-03">
+    <div class="slide-number">03</div>
+    <h2>OpenAI Implicit Prompt Cache &mdash; How to Hit It</h2>
+    <p>OpenAI implements prompt caching automatically &mdash; no <code>cache_control</code> markers required. The cache key is the first <strong>1024 tokens</strong> of the prompt; any request that shares this prefix gets a cache discount on the matching tokens.</p>
+
+    <h3>Mechanics</h3>
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>How OpenAI determines a hit</h4>
+            <ul>
+                <li>Prefix granularity is <strong>128 tokens</strong> (the KV cache block size)</li>
+                <li>Cache applies to the longest matching prefix in steps of 128 tokens</li>
+                <li>TTL is <strong>5&ndash;10 minutes</strong> (not published; empirically measured)</li>
+                <li>Only applies to <code>gpt-4o</code>, <code>gpt-4o-mini</code>, <code>o1</code>, <code>o3</code>, <code>o4-mini</code> as of 2025</li>
+                <li>Cache hit cost: <strong>50% off</strong> on cached input tokens (zero flag needed)</li>
+            </ul>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>How to maximise hit rate</h4>
+            <ul>
+                <li>Put static content <em>first</em>: system prompt, few-shot examples, document context</li>
+                <li>Put dynamic content <em>last</em>: user question, conversation history</li>
+                <li>Keep the static prefix &gt;1024 tokens to make the 50% discount meaningful</li>
+                <li>Avoid shuffling few-shot examples &mdash; any order change invalidates the cached prefix</li>
+                <li>Watch <code>usage.prompt_tokens_details.cached_tokens</code> in the response</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="code-block">
+        <div class="code-header">Python &mdash; reading cached token count from OpenAI response</div>
+<pre><code>response = client.chat.completions.<span class="fn">create</span>(
+    model=<span class="str">"gpt-4o"</span>,
+    messages=messages
+)
+usage = response.usage
+cached = usage.prompt_tokens_details.cached_tokens    <span class="cm"># may be 0 on cold start</span>
+uncached = usage.prompt_tokens - cached
+print(<span class="fn">f</span><span class="str">"Cached: {cached}, Uncached: {uncached}, Total: {usage.prompt_tokens}"</span>)
+<span class="cm"># Log this to your cost tracker — cached tokens cost 50% less</span></code></pre>
+    </div>
+
+    <div class="callout">
+        <div class="callout-label">Batch API and prompt cache</div>
+        <p>OpenAI&rsquo;s Batch API (50% discount vs synchronous) and prompt caching stack: a cached prefix in a batch request receives both discounts. A 10 K-token system prompt repeated across 1000 batch requests: 50% batch discount &times; 50% cache discount = 25% of standard cost for those tokens. Structure your batch requests accordingly.</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-04">
+    <div class="slide-number">04</div>
+    <h2>Semantic Cache &mdash; GPTCache &amp; the Dangers</h2>
+    <p>Semantic caching returns a cached response when the new prompt is <em>semantically similar</em> to a cached prompt &mdash; even if the text is different. GPTCache (<code>pip install gptcache</code>, v0.1.x) is the reference implementation.</p>
+
+    <div class="code-block">
+        <div class="code-header">GPTCache &mdash; minimal Redis-backed semantic cache</div>
+<pre><code><span class="kw">from</span> gptcache <span class="kw">import</span> cache
+<span class="kw">from</span> gptcache.adapter <span class="kw">import</span> openai
+<span class="kw">from</span> gptcache.embedding <span class="kw">import</span> <span class="type">Onnx</span>
+<span class="kw">from</span> gptcache.manager <span class="kw">import</span> <span class="fn">get_data_manager</span>, <span class="type">CacheBase</span>, <span class="type">VectorBase</span>
+<span class="kw">from</span> gptcache.similarity_evaluation <span class="kw">import</span> <span class="type">SearchDistanceEvaluation</span>
+
+encoder = <span class="type">Onnx</span>()           <span class="cm"># 22 MB ONNX model, ~2 ms CPU embed</span>
+
+cache.<span class="fn">init</span>(
+    embedding_func=encoder.to_embeddings,
+    data_manager=<span class="fn">get_data_manager</span>(
+        <span class="type">CacheBase</span>(<span class="str">"redis"</span>, url=<span class="str">"redis://localhost:6379"</span>),
+        <span class="type">VectorBase</span>(<span class="str">"faiss"</span>, dimension=<span class="num">768</span>)  <span class="cm"># or "redis" with HNSW</span>
+    ),
+    similarity_evaluation=<span class="type">SearchDistanceEvaluation</span>(),
+    similarity_threshold=<span class="num">0.97</span>,              <span class="cm"># cosine distance &lt; 0.03 = hit</span>
+)
+
+<span class="cm"># Drop-in replacement for openai.ChatCompletion</span>
+response = openai.ChatCompletion.<span class="fn">create</span>(
+    model=<span class="str">"gpt-4o"</span>,
+    messages=[{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: user_query}]
+)</code></pre>
+    </div>
+
+    <h3>The dangers &mdash; when semantic cache hurts</h3>
+    <div class="diagram-grid cols-3">
+        <div class="diagram-panel accent-border">
+            <h4>Threshold too low</h4>
+            <p>&ldquo;What is the capital of France?&rdquo; &rarr; cache hit for &ldquo;What was the historical capital of France before Paris?&rdquo;. Different correct answer. Set threshold &ge;0.97 for factual queries; 0.85 is only safe for classification tasks.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Stale factual data</h4>
+            <p>Cached answer reflects knowledge at time of caching. For queries about current events or mutable data (&ldquo;What is the price of X?&rdquo;) semantic cache should be disabled or TTL set to minutes.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Personalised responses</h4>
+            <p>Semantic cache is per-prompt by default. Two users asking the same question should not share a cached answer if the response depends on user context (account state, role, tier). Namespace the cache key by user segment or disable for personalised routes.</p>
+        </div>
+    </div>
+</section>
+
+<section class="slide" id="slide-05">
+    <div class="slide-number">05</div>
+    <h2>Embedding-Based Exact Match, Redis Variants</h2>
+    <p>A production semantic cache needs a vector index that scales to millions of cached prompts and serves similarity lookups in &lt;5 ms. Three Redis variants cover most use cases.</p>
+
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Backend</th><th>Index type</th><th>p99 latency (100 K vectors)</th><th>Notes</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Redis Stack + RedisVL</strong></td><td>HNSW (M=16, ef=64)</td><td>1&ndash;3 ms</td><td><code>redis-py</code> + <code>redisvl</code>; exact cosine or dot-product; supports metadata filter pre-query</td></tr>
+                <tr><td><strong>Redis Enterprise Vector Search</strong></td><td>HNSW / Flat</td><td>&lt;2 ms</td><td>Managed service; multi-tenant index partitioning; GDPR data residency</td></tr>
+                <tr><td><strong>Upstash Serverless Redis</strong></td><td>HNSW</td><td>10&ndash;30 ms (network round-trip)</td><td>Zero-ops; HTTP API; useful for edge deployments; cost scales with requests not instance size</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="code-block">
+        <div class="code-header">RedisVL &mdash; semantic cache with metadata filter</div>
+<pre><code><span class="kw">from</span> redisvl.extensions.llmcache <span class="kw">import</span> <span class="type">SemanticCache</span>
+<span class="kw">from</span> redisvl.utils.vectorize <span class="kw">import</span> <span class="type">OpenAITextVectorizer</span>
+
+cache = <span class="type">SemanticCache</span>(
+    name=<span class="str">"llm-cache"</span>,
+    redis_url=<span class="str">"redis://localhost:6379"</span>,
+    vectorizer=<span class="type">OpenAITextVectorizer</span>(model=<span class="str">"text-embedding-3-small"</span>),
+    distance_threshold=<span class="num">0.03</span>,       <span class="cm"># cosine distance (lower = stricter)</span>
+    ttl=<span class="num">3600</span>                         <span class="cm"># 1 hour TTL</span>
+)
+
+hit = cache.<span class="fn">check</span>(prompt=user_query,
+                   vector=cached_embedding,   <span class="cm"># reuse embed from retrieval step</span>
+                   filter_expression=<span class="str">f"@tenant:{tenant_id}"</span>)
+<span class="kw">if</span> hit:
+    <span class="kw">return</span> hit[<span class="num">0</span>][<span class="str">"response"</span>]
+
+response = call_llm(user_query)
+cache.<span class="fn">store</span>(prompt=user_query, response=response,
+            metadata={<span class="str">"tenant"</span>: tenant_id, <span class="str">"model"</span>: <span class="str">"gpt-4o"</span>})</code></pre>
+    </div>
+
+    <div class="callout">
+        <div class="callout-label">Embedding model consistency</div>
+        <p>Cache misses spike if you change the embedding model: a <code>text-embedding-ada-002</code> vector and a <code>text-embedding-3-small</code> vector for the same text are not comparable. Version-stamp your cache namespace by embedding model (<code>llm-cache:te3s:v1</code>) and warm the new namespace before switching.</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-06">
+    <div class="slide-number">06</div>
+    <h2>Routing Patterns &mdash; Capability, Cost, Latency</h2>
+    <p>Routing decides which model receives a request. The decision can be static (rule-based) or dynamic (measured at runtime). Three orthogonal routing dimensions apply to most production systems.</p>
+
+    <div class="diagram-grid cols-3">
+        <div class="diagram-panel accent-border">
+            <h4>Capability routing</h4>
+            <p>Route by what the model <em>can</em> do: context window, vision support, tool-calling, structured output, language. Examples:</p>
+            <ul>
+                <li>Request with image &rarr; vision-capable model</li>
+                <li>Prompt &gt;100 K tokens &rarr; 200 K context model</li>
+                <li>Requires JSON schema output &rarr; model with reliable structured output</li>
+                <li>Non-English query &rarr; model with that language in training</li>
+            </ul>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Cost routing</h4>
+            <p>Route simple tasks to cheap models. A query classifier (a small LLM or a fine-tuned BERT) tags requests as <code>simple</code> / <code>medium</code> / <code>complex</code>. Simple &rarr; GPT-4o-mini or Haiku; complex &rarr; GPT-4o or Sonnet 3.5. Cost saving 60&ndash;80% on simple-task traffic with minimal quality loss if the classifier is well-tuned.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Latency routing</h4>
+            <p>Route time-sensitive requests (&ldquo;live chat&rdquo;) to the lowest-latency provider/region. Use EWMA of recent p50 latency per provider, measured at the gateway. Switch provider when EWMA exceeds SLO budget. Cache the EWMA in Redis (10-second TTL); don&rsquo;t recompute per-request.</p>
+        </div>
+    </div>
+
+    <div class="code-block">
+        <div class="code-header">LiteLLM config &mdash; model group with capability tag filter</div>
+<pre><code><span class="type">model_list</span>:
+  - <span class="type">model_name</span>: <span class="str">vision-capable</span>
+    <span class="type">litellm_params</span>:
+      <span class="type">model</span>: <span class="str">openai/gpt-4o</span>
+      <span class="type">api_key</span>: <span class="str">os.environ/OPENAI_API_KEY</span>
+    <span class="type">model_info</span>: {<span class="type">supports_vision</span>: <span class="kw">true</span>}
+
+  - <span class="type">model_name</span>: <span class="str">cheap-text</span>
+    <span class="type">litellm_params</span>:
+      <span class="type">model</span>: <span class="str">openai/gpt-4o-mini</span>
+      <span class="type">api_key</span>: <span class="str">os.environ/OPENAI_API_KEY</span>
+    <span class="type">model_info</span>: {<span class="type">supports_vision</span>: <span class="kw">false</span>, <span class="type">input_cost_per_token</span>: <span class="num">0.00000015</span>}</code></pre>
+    </div>
+</section>
+
+<section class="slide" id="slide-07">
+    <div class="slide-number">07</div>
+    <h2>A/B Routing &mdash; Shadow Traffic, Canary</h2>
+    <p>Routing decisions are not just about cost and latency &mdash; they are also the mechanism for safely introducing new models into production. Three progressive rollout patterns apply.</p>
+
+    <div class="hierarchy">
+        <div class="hierarchy-level">
+            <div class="hierarchy-label">Shadow</div>
+            <div class="hierarchy-items">
+                <div class="hierarchy-item accent">100% traffic &rarr; Model A (live)</div>
+                <div class="hierarchy-item">100% traffic &rarr; Model B (shadow, response discarded)</div>
+            </div>
+        </div>
+        <div class="hierarchy-level">
+            <div class="hierarchy-label">Canary</div>
+            <div class="hierarchy-items">
+                <div class="hierarchy-item accent">95% traffic &rarr; Model A (control)</div>
+                <div class="hierarchy-item">5% traffic &rarr; Model B (canary, response live)</div>
+            </div>
+        </div>
+        <div class="hierarchy-level">
+            <div class="hierarchy-label">A/B test</div>
+            <div class="hierarchy-items">
+                <div class="hierarchy-item accent">50% users &rarr; Model A (sticky)</div>
+                <div class="hierarchy-item">50% users &rarr; Model B (sticky)</div>
+            </div>
+        </div>
+        <div class="hierarchy-level">
+            <div class="hierarchy-label">Full rollout</div>
+            <div class="hierarchy-items">
+                <div class="hierarchy-item accent">100% traffic &rarr; Model B (winner)</div>
+            </div>
+        </div>
+    </div>
+
+    <h3>Implementation detail</h3>
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>Shadow traffic implementation</h4>
+            <p>Fire the shadow request asynchronously (<code>asyncio.create_task</code> or a background queue). Do NOT await it on the critical path. Log the shadow response to a separate trace. Compare quality offline: automated eval (LLM-as-judge) on paired {prompt, A-response, B-response} triples.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Sticky assignment for A/B</h4>
+            <p>Hash <code>user_id + experiment_id</code> to assign a user to a variant. Use a Bloom filter or Redis bitmap to record assignment; never re-roll. Sticky assignment is critical: if a user switches between variants mid-session, you contaminate both experimental groups.</p>
+        </div>
+    </div>
+
+    <div class="callout">
+        <div class="callout-label">Statistical power</div>
+        <p>LLM quality differences are small (1&ndash;5% on typical evals). You need sample sizes in the thousands before a difference is statistically significant at p&lt;0.05. A/B tests with LLM evals require longer run windows than traditional latency A/B tests. Plan for at least 7 days at production traffic before drawing conclusions.</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-08">
+    <div class="slide-number">08</div>
+    <h2>Hit-Rate Metrics &amp; Cache Hygiene</h2>
+    <p>A cache that nobody monitors is a cache that quietly stops working. Track these metrics continuously and set alerts on degradation.</p>
+
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Metric</th><th>Definition</th><th>Alert threshold</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Exact cache hit rate</strong></td><td>hits / (hits + misses) over 1-hour window</td><td>Alert if &lt;20% drop from 7-day baseline</td></tr>
+                <tr><td><strong>Semantic cache hit rate</strong></td><td>semantic hits / total requests (excludes exact hits)</td><td>Alert if &lt;expected rate for that route type</td></tr>
+                <tr><td><strong>Prompt cache hit tokens</strong></td><td><code>cache_read_input_tokens</code> / <code>input_tokens</code> per provider</td><td>Alert if &lt;50% on routes known to have long static prefixes</td></tr>
+                <tr><td><strong>Cache cost saving</strong></td><td>((cached tokens &times; uncached price) - (cached tokens &times; cached price)) / day</td><td>Alert if savings drop &gt;25% day-over-day</td></tr>
+                <tr><td><strong>Semantic cache false positive rate</strong></td><td>Fraction of cache hits that received a &ldquo;wrong answer&rdquo; eval score</td><td>Alert if &gt;2%</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <h3>Cache hygiene operations</h3>
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>Invalidation triggers</h4>
+            <ul>
+                <li>Model version change &mdash; flush the entire cache namespace for that model</li>
+                <li>System prompt change &mdash; flush exact and semantic caches (prompt cache self-expires)</li>
+                <li>Knowledge cutoff &mdash; expire time-sensitive cached answers via per-entry TTL</li>
+                <li>Regulatory requirement &mdash; purge by user_id on erasure request</li>
+            </ul>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Warming strategies</h4>
+            <ul>
+                <li>Pre-populate semantic cache on deploy with synthetic question variants</li>
+                <li>Replay yesterday&rsquo;s top-100 queries against the new cache after a flush</li>
+                <li>Prompt cache: send a warm-up request with the static prefix before routing live traffic</li>
+                <li>Measure cold-start latency and account for it in SLO calculations</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section class="slide" id="slide-09">
+    <div class="slide-number">09</div>
+    <h2>What to Take Away</h2>
+    <ul>
+        <li><strong>Three independent cache layers.</strong> Exact match (100% saving, zero cost), semantic match (100% saving, similarity risk), provider prompt cache (50&ndash;90% on prefix tokens).</li>
+        <li><strong>Anthropic prompt cache:</strong> mark breakpoints with <code>cache_control: ephemeral</code>; minimum 1024 tokens; TTL 5 minutes; cache write costs 1.25&times;. Break-even at ~1.4 uses.</li>
+        <li><strong>OpenAI prompt cache:</strong> automatic; 128-token granularity; 50% off cached tokens; put static content first, dynamic content last.</li>
+        <li><strong>Semantic cache threshold matters.</strong> 0.97 cosine for factual queries; namespace by tenant; disable for personalised or time-sensitive routes.</li>
+        <li><strong>RedisVL + HNSW</strong> gives &lt;3 ms semantic cache lookups at 100 K scale; embed once, reuse for both retrieval and cache lookup.</li>
+        <li><strong>Route by capability first</strong> (context window, vision), then cost, then latency. A query classifier sending simple tasks to cheap models saves 60&ndash;80% on that traffic segment.</li>
+        <li><strong>Shadow &rarr; canary &rarr; A/B &rarr; full rollout.</strong> Run A/B for 7+ days; use sticky user assignment; compare with automated LLM-as-judge evals.</li>
+        <li><strong>Monitor hit rates.</strong> Alert on &gt;20% drops; flush caches on model version changes; purge by user ID for GDPR erasure.</li>
+    </ul>
+
+    <div class="callout">
+        <div class="callout-label">Where to next</div>
+        <p>Deck 04 covers the cost and SLO side: token economics, TTFT and TPS measurement, per-task cost metrics, capacity planning, rate limiting, and budget enforcement.</p>
+    </div>
+</section>
+
+<footer class="footer">
+    <p>Part of the <a href="https://github.com/BrendanJamesLynskey/LLM_Hub_LLMOps">Production LLMOps Series</a></p>
+    <p style="margin-top: 0.5rem; font-size: 0.8rem;"><a href="https://github.com/BrendanJamesLynskey/LLM_Hub_LLMOps">Back to Series Index</a></p>
+</footer>
+<script>
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function (e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    });
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.style.opacity = '1';
+                entry.target.style.transform = 'translateY(0)';
+            }
+        });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.slide').forEach(slide => {
+        slide.style.opacity = '0';
+        slide.style.transform = 'translateY(30px)';
+        slide.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+        observer.observe(slide);
+    });
+</script>
+</body>
+</html>
